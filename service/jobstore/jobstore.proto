@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package jobstore;
+
+service JobManager {
+  rpc CreateJob (Hostname) returns (JobData) {}
+  rpc LookupJob (UUID) returns (JobData) {}
+}
+
+message UUID {
+  string value = 1;
+}
+
+message Hostname {
+  string name = 1;
+}
+
+message JobData {
+  UUID uuid = 1;
+  Hostname hostname = 2;
+}
