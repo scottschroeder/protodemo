@@ -278,6 +278,7 @@ def main():
     dump_repo(repo)
     print(repo.head.name, repo.head.shorthand)
     return
+    #wtb annotated tags?
 
     try:
         default_config = load_default_config(args.config)
