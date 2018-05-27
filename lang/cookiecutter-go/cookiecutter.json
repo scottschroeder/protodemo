@@ -1,0 +1,5 @@
+{
+  "repo": null,
+  "source_dir": null,
+  "module": "{{ cookiecutter.source_dir }}"
+}

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+import base64
 import logging
 import json
+import datetime
 import jsonschema
 import docker
 import pygit2
@@ -10,6 +12,7 @@ import copy
 import os
 import sys
 import shutil
+from cookiecutter.main import cookiecutter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -17,6 +20,7 @@ _SERVICE_CONFIG_NAME = "config.json"
 _SCRIPT_PATH = os.path.dirname(os.path.realpath(__file__))
 _SERVICES = os.path.join(_SCRIPT_PATH, 'service')
 _DEFAULT_CONFIG = os.path.join(_SCRIPT_PATH, 'config.json')
+_TEMPLATES = os.path.join(_SCRIPT_PATH, 'lang')
 
 
 class ProtoRepoException(Exception):
@@ -38,7 +42,7 @@ _FULL_CONFIG_SCHEMA = {
     "type": "object",
     "properties": {
         "github_org": {"type": "string"},
-        "repo_name": {"type": "string"},
+        "repo": {"type": "string"},
         "lang": {
             "type": "string",
             "enum": ["python", "go"]
@@ -46,6 +50,15 @@ _FULL_CONFIG_SCHEMA = {
     },
     "required": ["lang", "github_org"]
 }
+
+
+def generated_source_dir(lang, service):
+    if lang == 'python':
+        return "{}_proto".format(service)
+    elif lang == 'go':
+        return "{}_proto".format(service)
+    else:
+        raise ProtoRepoException("Tried to figure out source for unknown lang: {}".format(lang))
 
 
 def _setup_logging(verbosity=0):
@@ -56,7 +69,7 @@ def _setup_logging(verbosity=0):
     else:
         loglevel = logging.DEBUG
     # Set up logging
-    logging_format = "[%(levelname)s] - %(message)s"
+    logging_format = "[%(levelname)s] (%(name)s) - %(message)s"
     logging.basicConfig(stream=sys.stderr, level=loglevel, format=logging_format)
 
 
@@ -96,10 +109,13 @@ def load_service_config(service, default_config):
         full_config.update(service_lang_config)
         jsonschema.validate(full_config, _FULL_CONFIG_SCHEMA)
 
-        full_config.update({'path': os.path.join(_SERVICES, service)})
         if 'repo' not in full_config:
             full_config.update({'repo': 'proto-{}-{}'.format(service, full_config['lang'])})
-        full_config.update({'service': service})
+        full_config.update({
+            'path': os.path.join(_SERVICES, service),
+            'service': service,
+            'source_dir': generated_source_dir(full_config['lang'], service)
+        })
         config.append(full_config)
     return config
 
@@ -133,9 +149,31 @@ def do_job(config):
 
 def wipe_git_repo(repo_dir):
     for fs_object in os.listdir(repo_dir):
+        full_path = os.path.join(repo_dir, fs_object)
         if fs_object == '.git':
             continue
-        shutil.rmtree(os.path.join(repo_dir, fs_object))
+        elif os.path.isfile(full_path):
+            os.remove(full_path)
+        else:
+            shutil.rmtree(full_path)
+
+
+def copy_source_code(src, dst):
+    if not os.path.exists(dst):
+        os.mkdir(dst, 0o755)
+
+    for fs_object in os.listdir(src):
+        src_full_path = os.path.join(src, fs_object)
+        dst_full_path = os.path.join(dst, fs_object)
+
+        if os.path.isdir(src_full_path):
+            shutil.copytree(src_full_path, dst_full_path)
+        else:
+            shutil.copy2(src_full_path, dst_full_path)
+
+
+def make_cookiecutter(template, dest, config):
+    cookiecutter(template, output_dir=dest, no_input=True, extra_context=config, overwrite_if_exists=True)
 
 
 def update_repo(config, code_dir):
@@ -143,6 +181,13 @@ def update_repo(config, code_dir):
     repo = pygit2.clone_repository(
         '{}/{}'.format(config['github_org'], config['repo']),
         repo_dir,
+    )
+    wipe_git_repo(repo_dir)
+
+    make_cookiecutter(
+        os.path.join(_TEMPLATES, "cookiecutter-{}".format(config['lang'])),
+        os.path.split(repo_dir)[0],
+        config,
     )
 
     # TODO author and committer and branch
@@ -159,10 +204,7 @@ def update_repo(config, code_dir):
         repo.head.set_target(oid)
         _LOGGER.info("Initialized Repository %s at %s", config['repo'], oid.hex)
 
-    wipe_git_repo(repo_dir)
-
-    _LOGGER.debug("Copy %s -> %s", code_dir, repo_dir)
-    shutil.copytree(code_dir, os.path.join(repo_dir, 'src'))
+    copy_source_code(code_dir, os.path.join(repo_dir, config['source_dir']))
     repo.index.add_all()
     repo.index.write()
 
@@ -187,13 +229,43 @@ def update_repo(config, code_dir):
     repo.remotes['origin'].push([branch])
 
 
-def remote_data(remote):
-    return {
-        'name': remote.name,
-        'url': remote.url,
-        'push_url': remote.push_url,
+def get_protorepo():
+    repository_path = pygit2.discover_repository(_SCRIPT_PATH)
+    repo = pygit2.Repository(repository_path)
+    return repo
+
+def dump_repo(repo):
+
+    objects = {
+        'tags': [],
+        'commits': [],
     }
 
+    for objhex in repo:
+        obj = repo[objhex]
+        if obj.type == pygit2.GIT_OBJ_COMMIT:
+            objects['commits'].append({
+                'hash': obj.hex,
+                'message': obj.message,
+                'commit_date': obj.commit_time,
+                'author_name': obj.author.name,
+                'author_email': obj.author.email,
+                'parents': [c.hex for c in obj.parents],
+            })
+        elif obj.type == pygit2.GIT_OBJ_TAG:
+            objects['tags'].append({
+                'hex': obj.hex,
+                'name': obj.name,
+                'message': obj.message,
+                'target': base64.b16encode(obj.target).lower(),
+                'tagger_name': obj.tagger.name,
+                'tagger_email': obj.tagger.email,
+            })
+        else:
+            # ignore blobs and trees
+            pass
+
+    print(json.dumps(objects, indent=2))
 
 def main():
     args = parse_args()
@@ -201,6 +273,12 @@ def main():
     _LOGGER.debug(args)
 
     manifest = []
+
+    repo = get_protorepo()
+    dump_repo(repo)
+    print(repo.head.name, repo.head.shorthand)
+    return
+
     try:
         default_config = load_default_config(args.config)
         services = list_services()
@@ -208,7 +286,7 @@ def main():
             config = load_service_config(service, default_config)
             manifest.extend(config)
         for job in manifest:
-            # if job['service'] == 'helloworld' and job['lang'] == 'python':
+            # if job['lang'] == 'python':
             do_job(job)
     except ProtoRepoException as e:
         _LOGGER.error(e)
