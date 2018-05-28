@@ -134,7 +134,7 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
                     tag_data['message']
                 )
                 push_objects.append('refs/tags/{}'.format(tag_data['version']))
-                _LOGGER.info("Created tag %s (%s): %s", tag_data['version'], tag_oid, tag_data['message'])
+                _LOGGER.info("Created tag %s (%s): %s", tag_data['version'], tag_oid, tag_data['message'].strip())
             except ValueError:
                 _LOGGER.error(
                     "Tag %s, already exists on %s! This has to be remedied manually.",
