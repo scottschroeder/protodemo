@@ -110,7 +110,7 @@ def analyze_tag(repo, tagref):
     except IndexError:
         raise ValueError("tagref '{}' was not of the form 'refs/tags/mytag'".format(tagref))
 
-    _LOGGER.info("Tagname: %s", tagname)
+    _LOGGER.debug("Processing tag: %s", tagname)
 
     tagobj = repo.get(repo.lookup_reference(tagref).target)
 

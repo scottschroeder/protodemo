@@ -41,7 +41,7 @@ def _setup_logging(verbosity=0):
     else:
         loglevel = logging.DEBUG
     # Set up logging
-    logging_format = "[%(levelname)s] (%(name)s) - %(message)s"
+    logging_format = "[%(levelname)s] [%(name)s](%(lineno)d) - %(message)s"
     logging.basicConfig(stream=sys.stderr, level=loglevel, format=logging_format)
 
 
@@ -84,10 +84,8 @@ def prepare_repo(job_config, repo_dir, templates_dir, update_git):
 
 
 def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, update_git=False):
-    _LOGGER.info("Processing {} ({}):\n{}".format(
-        job_config['service'], job_config['lang'],
-        json.dumps(job_config, indent=2, sort_keys=True)
-    ))
+    _LOGGER.info("Processing %s (%s): %s", job_config['service'], job_config['lang'], job_config['repo'])
+    _LOGGER.debug("Job data for %s:\n%s", job_config['repo'], json.dumps(job_config, indent=2, sort_keys=True))
 
     repo_dir = os.path.join(output_dir, job_config['repo'])
 
@@ -127,27 +125,27 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
 
     for tag_data in git_data['tags']:
         if tag_data.get('service') == job_config['service']:
-            if git_data['dirty']:
-                _LOGGER.warning("Skipping tag %s from dirty repo", tag_data['name'])
-                continue
+            try:
+                tag_oid = repo.create_tag(
+                    tag_data['version'],
+                    repo.head.target,
+                    pygit2.GIT_OBJ_COMMIT,
+                    tag_data['tagger'],
+                    tag_data['message']
+                )
+                requires_push = True
 
-            # TODO only if tag does not already exist!
-            requires_push = True
-            tag_oid = repo.create_tag(
-                tag_data['version'],
-                repo.head.target,
-                pygit2.GIT_OBJ_COMMIT,
-                tag_data['tagger'],
-                tag_data['message']
-            )
-
-            _LOGGER.info("Created tag %s (%s): %s", tag_data['version'], tag_oid, tag_data['message'])
+                _LOGGER.info("Created tag %s (%s): %s", tag_data['version'], tag_oid, tag_data['message'])
+            except ValueError:
+                _LOGGER.error(
+                    "Tag %s, already exists on %s! This has to be remedied manually.",
+                    tag_data['version'],
+                    job_config['repo'],
+                )
 
     if update_git:
         if not requires_push:
             _LOGGER.debug("No changes for %s", job_config['repo'])
-        elif git_data['dirty']:
-            _LOGGER.warning("Not going to push changes from a dirty branch!")
         else:
             repo.remotes.set_push_url('origin', repo.remotes['origin'].url)
             repo.remotes['origin'].push([branch])
@@ -179,6 +177,11 @@ def main():
         output_dir = os.path.abspath(args.output)
 
     try:
+        if repodata['dirty'] and args.git:
+            raise ProtoRepoException(
+                "The protorepo has uncommitted changes. This is not allowed with the --git option."
+            )
+
         config_path = args.config if args.config else os.path.join(working_dir, _RELATIVE_PATH_TO_CONFIG)
         default_config = config.load_default_config(config_path)
         for service in os.listdir(service_dir):
