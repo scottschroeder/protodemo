@@ -106,9 +106,8 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
 
     diff = repo.diff('HEAD', cached=True)
 
-    requires_push = False
+    push_objects = []
     if len(diff):
-        requires_push = True
         dirty_message = '[DIRTY] - ' if git_data['dirty'] else ''
 
         tree = repo.index.write_tree()
@@ -122,6 +121,7 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
         )
         repo.head.set_target(oid)
         _LOGGER.info("Made Commit to Repository %s at %s", job_config['repo'], oid.hex)
+        push_objects.append(branch)
 
     for tag_data in git_data['tags']:
         if tag_data.get('service') == job_config['service']:
@@ -133,8 +133,7 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
                     tag_data['tagger'],
                     tag_data['message']
                 )
-                requires_push = True
-
+                push_objects.append('refs/tags/{}'.format(tag_data['version']))
                 _LOGGER.info("Created tag %s (%s): %s", tag_data['version'], tag_oid, tag_data['message'])
             except ValueError:
                 _LOGGER.error(
@@ -143,12 +142,11 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
                     job_config['repo'],
                 )
 
-    if update_git:
-        if not requires_push:
-            _LOGGER.debug("No changes for %s", job_config['repo'])
-        else:
-            repo.remotes.set_push_url('origin', repo.remotes['origin'].url)
-            repo.remotes['origin'].push([branch])
+    if not push_objects:
+        _LOGGER.debug("No changes for %s", job_config['repo'])
+    elif update_git:
+        repo.remotes.set_push_url('origin', repo.remotes['origin'].url)
+        repo.remotes['origin'].push(push_objects)
 
 
 def main():
