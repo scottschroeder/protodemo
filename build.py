@@ -107,30 +107,35 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
     repo.index.write()
 
     diff = repo.diff('HEAD', cached=True)
-    if len(diff) == 0:
-        _LOGGER.debug("No changes for %s", job_config['repo'])
-        return
 
-    dirty_message = '[DIRTY] - ' if git_data['dirty'] else ''
+    requires_push = False
+    if len(diff):
+        requires_push = True
+        dirty_message = '[DIRTY] - ' if git_data['dirty'] else ''
 
-    tree = repo.index.write_tree()
-    oid = repo.create_commit(
-        branch,
-        git_data['author'],
-        git_data['committer'],
-        '{}Automatic Commit - protoc codegen\n\n{}'.format(dirty_message, git_data['message']),
-        tree,
-        [repo.head.target]
-    )
-    repo.head.set_target(oid)
-    _LOGGER.info("Made Commit to Repository %s at %s", job_config['repo'], oid.hex)
+        tree = repo.index.write_tree()
+        oid = repo.create_commit(
+            branch,
+            git_data['author'],
+            git_data['committer'],
+            '{}Automatic Commit - protoc codegen\n\n{}'.format(dirty_message, git_data['message']),
+            tree,
+            [repo.head.target]
+        )
+        repo.head.set_target(oid)
+        _LOGGER.info("Made Commit to Repository %s at %s", job_config['repo'], oid.hex)
 
     for tag_data in git_data['tags']:
         if tag_data.get('service') == job_config['service']:
+            if git_data['dirty']:
+                _LOGGER.warning("Skipping tag %s from dirty repo", tag_data['name'])
+                continue
+
             # TODO only if tag does not already exist!
+            requires_push = True
             tag_oid = repo.create_tag(
                 tag_data['version'],
-                oid,
+                repo.head.target,
                 pygit2.GIT_OBJ_BLOB,
                 tag_data['tagger'],
                 tag_data['message']
@@ -139,7 +144,9 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
             _LOGGER.info("Created tag %s: %s", tag_oid, repo[tag_oid]['message'])
 
     if update_git:
-        if git_data['dirty']:
+        if not requires_push:
+            _LOGGER.debug("No changes for %s", job_config['repo'])
+        elif git_data['dirty']:
             _LOGGER.warning("Not going to push changes from a dirty branch!")
         else:
             repo.remotes.set_push_url('origin', repo.remotes['origin'].url)

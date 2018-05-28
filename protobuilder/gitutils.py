@@ -90,9 +90,10 @@ def analyze_head(repo):
 
 def check_dirty(repo):
     working = repo.diff()
+    last_commit = repo.diff('HEAD')
     staged = repo.diff('HEAD', cached=True)
 
-    if len(staged) + len(working):
+    if len(staged) + len(working) + len(last_commit):
         return True
     else:
         return False
