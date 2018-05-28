@@ -2,7 +2,6 @@
 
 import argparse
 import logging
-import pprint
 import json
 import pygit2
 import os
@@ -26,10 +25,19 @@ _RELATIVE_PATH_TO_TEMPLATES = 'lang'
 
 
 def _setup_logging(verbosity=0):
+    third_party_modules = [
+        'binaryornot',
+        'cookiecutter',
+        'docker',
+        'urllib3',
+    ]
+
     if verbosity == 0:
-        loglevel = logging.WARNING
-    elif verbosity == 1:
         loglevel = logging.INFO
+    elif verbosity == 1:
+        loglevel = logging.DEBUG
+        for module in third_party_modules:
+            logging.getLogger(module).setLevel(logging.INFO)
     else:
         loglevel = logging.DEBUG
     # Set up logging
@@ -43,21 +51,17 @@ def parse_args():
     parser.add_argument("--service", "-s", action='store', help="Apply only to a specific service")
     parser.add_argument("--lang", "-l", action='store', help="Apply only to a specific service")
     parser.add_argument("--config", "-c", action='store', help="Default configuration file")
-    parser.add_argument("--git", action='store_true', help="Apply Changes to existing git repositories")
-    parser.add_argument("--output", "-o", action='store', help="Output directory to store codegen")
+
+    output = parser.add_mutually_exclusive_group(required=True)
+    output.add_argument("--git", action="store_true", help="Make all changes to existing git repository")
+    output.add_argument("--output", "-o", action="store", help="Make all changes to local directory")
+
     parser.add_argument("repo", action='store', help="Location of protorepo")
     args = parser.parse_args()
     return args
 
 
-def update_repo(job_config, service_dir, output_dir, templates_dir, update_git=False):
-    _LOGGER.info("Processing {} ({}):\n{}".format(
-        job_config['service'], job_config['lang'],
-        json.dumps(job_config, indent=2, sort_keys=True)
-    ))
-
-    repo_dir = os.path.join(output_dir, job_config['repo'])
-
+def prepare_repo(job_config, repo_dir, templates_dir, update_git):
     if update_git:
         repo = pygit2.clone_repository(
             '{}/{}'.format(job_config['github_org'], job_config['repo']),
@@ -76,14 +80,25 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, update_git=F
         overwrite_if_exists=True,
     )
 
-    # TODO author and committer and branch
-    author = pygit2.Signature('root (author)', 'root@localhost')
-    committer = pygit2.Signature('root (committer)', 'root@localhost')
+    return repo
+
+
+def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, update_git=False):
+    _LOGGER.info("Processing {} ({}):\n{}".format(
+        job_config['service'], job_config['lang'],
+        json.dumps(job_config, indent=2, sort_keys=True)
+    ))
+
+    repo_dir = os.path.join(output_dir, job_config['repo'])
+
+    repo = prepare_repo(job_config, repo_dir, templates_dir, update_git)
+
+    # TODO: Branching
     branch = 'refs/heads/master'
 
     if repo.is_empty:
         tree = repo.TreeBuilder().write()
-        oid = repo.create_commit(branch, author, committer, 'Initial Commit', tree, [])
+        oid = repo.create_commit(branch, git_data['author'], git_data['committer'], 'Initial Commit', tree, [])
         repo.head.set_target(oid)
         _LOGGER.info("Initialized Repository %s at %s", job_config['repo'], oid.hex)
 
@@ -96,21 +111,39 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, update_git=F
         _LOGGER.debug("No changes for %s", job_config['repo'])
         return
 
+    dirty_message = '[DIRTY] - ' if git_data['dirty'] else ''
+
     tree = repo.index.write_tree()
     oid = repo.create_commit(
         branch,
-        author,
-        committer,
-        'Automatic Commit - protoc codegen',
+        git_data['author'],
+        git_data['committer'],
+        '{}Automatic Commit - protoc codegen\n\n{}'.format(dirty_message, git_data['message']),
         tree,
         [repo.head.target]
     )
     repo.head.set_target(oid)
     _LOGGER.info("Made Commit to Repository %s at %s", job_config['repo'], oid.hex)
 
+    for tag_data in git_data['tags']:
+        if tag_data.get('service') == job_config['service']:
+            # TODO only if tag does not already exist!
+            tag_oid = repo.create_tag(
+                tag_data['version'],
+                oid,
+                pygit2.GIT_OBJ_BLOB,
+                tag_data['tagger'],
+                tag_data['message']
+            )
+
+            _LOGGER.info("Created tag %s: %s", tag_oid, repo[tag_oid]['message'])
+
     if update_git:
-        repo.remotes.set_push_url('origin', repo.remotes['origin'].url)
-        repo.remotes['origin'].push([branch])
+        if git_data['dirty']:
+            _LOGGER.warning("Not going to push changes from a dirty branch!")
+        else:
+            repo.remotes.set_push_url('origin', repo.remotes['origin'].url)
+            repo.remotes['origin'].push([branch])
 
 
 def main():
@@ -121,11 +154,15 @@ def main():
     manifest = []
 
     repo = gitutils.get_repo_from_path(args.repo)
+
     working_dir = repo.workdir
     service_dir = os.path.join(working_dir, _RELATIVE_PATH_TO_SERVICES)
 
     repodata = gitutils.analyze_head(repo)
-    _LOGGER.debug("Repo Data: %s", repodata)
+    _LOGGER.debug(
+        "Using git data from HEAD: %s",
+        json.dumps(gitutils.jsonify_git_data(repodata), indent=2, sort_keys=True),
+    )
 
     if not args.output:
         tempdir = tempfile.TemporaryDirectory()
@@ -151,7 +188,8 @@ def main():
                 service_dir,
                 output_dir,
                 os.path.join(working_dir, _RELATIVE_PATH_TO_TEMPLATES),
-                update_git=args.git
+                repodata,
+                update_git=args.git,
             )
 
 

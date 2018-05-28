@@ -46,6 +46,22 @@ def repo_data(repo):
     return objects
 
 
+def jsonify_git_data(data):
+    pretty = {}
+
+    for k, v in data.items():
+        if isinstance(v, pygit2.Signature):
+            pretty.update({k: "{} <{}>".format(v.name, v.email)})
+        elif isinstance(v, dict):
+            pretty.update({k: jsonify_git_data(v)})
+        elif isinstance(v, list):
+            pretty.update({k: [jsonify_git_data(item) for item in v]})
+        else:
+            pretty.update({k: v})
+
+    return pretty
+
+
 def analyze_head(repo):
     data = {
         'committer': repo.default_signature,
@@ -62,6 +78,7 @@ def analyze_head(repo):
     commit = repo.get(repo.head.target)
     data['author'] = commit.author
     data['message'] = commit.message
+    data['dirty'] = check_dirty(repo)
 
     data['tags'] = [
         analyze_tag(repo, tagref)
@@ -69,6 +86,16 @@ def analyze_head(repo):
     ]
 
     return data
+
+
+def check_dirty(repo):
+    working = repo.diff()
+    staged = repo.diff('HEAD', cached=True)
+
+    if len(staged) + len(working):
+        return True
+    else:
+        return False
 
 
 def analyze_tag(repo, tagref):
