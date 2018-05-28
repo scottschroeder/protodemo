@@ -136,12 +136,12 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
             tag_oid = repo.create_tag(
                 tag_data['version'],
                 repo.head.target,
-                pygit2.GIT_OBJ_BLOB,
+                pygit2.GIT_OBJ_COMMIT,
                 tag_data['tagger'],
                 tag_data['message']
             )
 
-            _LOGGER.info("Created tag %s: %s", tag_oid, repo[tag_oid]['message'])
+            _LOGGER.info("Created tag %s (%s): %s", tag_data['version'], tag_oid, tag_data['message'])
 
     if update_git:
         if not requires_push:
