@@ -145,7 +145,9 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
     if not push_objects:
         _LOGGER.debug("No changes for %s", job_config['repo'])
     elif update_git:
-        repo.remotes.set_push_url('origin', repo.remotes['origin'].url)
+        remote = repo.remotes['origin'].url
+        repo.remotes.set_push_url('origin', remote)
+        _LOGGER.info("Pushing changes to %s: %s", remote, push_objects)
         repo.remotes['origin'].push(push_objects)
 
 
