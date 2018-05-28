@@ -1,4 +1,19 @@
+import pygit2
+import logging
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def get_repo_from_path(path):
+    repository_path = pygit2.discover_repository(path)
+    return pygit2.Repository(repository_path)
+
+
 def repo_data(repo):
+    """
+    This is a helper utility that doesn't get used by the main execution
+    Its been invaluable enough times that it gets to stay
+    """
     objects = {
         'tags': [],
         'commits': [],
@@ -91,8 +106,6 @@ def analyze_tag(repo, tagref):
     if len(tag_parts) == 2:
         data['service'] = tag_parts[0]
         data['version'] = tag_parts[1]
-        if tag_parts[0] not in list_services():
-            _LOGGER.warning("Did not recognize service %s from tag %s", data['service'], tagname)
 
     return data
 
