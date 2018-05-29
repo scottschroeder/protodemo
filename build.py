@@ -83,6 +83,48 @@ def prepare_repo(job_config, repo_dir, templates_dir, update_git):
     return repo
 
 
+def setup_branch(repo, git_data):
+    """
+    args:
+        repo (pygit2.Repository):
+
+    We want to match the branch from protorepo (git_data),
+    to the stub repo we are currently building (repo)
+    """
+    changes = False
+    current_branch = repo.head.shorthand
+    last_commit = repo.head
+
+    try:
+        branch = git_data['branch']
+    except KeyError:
+        branch = current_branch
+
+    branch_ref = "refs/heads/{}".format(branch)
+    remote_name = "origin/{}".format(branch)
+
+    all_branches = repo.listall_branches(pygit2.GIT_BRANCH_ALL)
+
+    _LOGGER.debug("Current branch: %s target branch: %s", current_branch, branch)
+    _LOGGER.debug("Branches: %s", all_branches)
+
+    if current_branch == branch:
+        return branch_ref, changes
+
+    if branch not in all_branches:
+        if remote_name in all_branches:
+            rbranch = repo.lookup_branch(remote_name, pygit2.GIT_BRANCH_REMOTE)
+            _LOGGER.debug("Setting last commit to %s", rbranch.name)
+            last_commit = repo.lookup_reference(rbranch.name)
+        else:
+            changes = True
+        _LOGGER.debug("Branch not found, creating %s", branch)
+        repo.create_branch(branch, repo.get(last_commit.target))
+
+    repo.checkout(branch_ref)
+    return branch_ref, changes
+
+
 def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, update_git=False):
     _LOGGER.info("Processing %s (%s): %s", job_config['service'], job_config['lang'], job_config['repo'])
     _LOGGER.debug("Job data for %s:\n%s", job_config['repo'], json.dumps(job_config, indent=2, sort_keys=True))
@@ -91,8 +133,12 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
 
     repo = prepare_repo(job_config, repo_dir, templates_dir, update_git)
 
-    # TODO: Branching
-    branch = 'refs/heads/master'
+    branch, newbranch = setup_branch(repo, git_data)
+
+    push_objects = []
+
+    if newbranch:
+        push_objects.append(branch)
 
     if repo.is_empty:
         tree = repo.TreeBuilder().write()
@@ -106,7 +152,6 @@ def update_repo(job_config, service_dir, output_dir, templates_dir, git_data, up
 
     diff = repo.diff('HEAD', cached=True)
 
-    push_objects = []
     if len(diff):
         dirty_message = '[DIRTY] - ' if git_data['dirty'] else ''
 
@@ -177,7 +222,7 @@ def main():
         output_dir = os.path.abspath(args.output)
 
     try:
-        if repodata['dirty'] and args.git:
+        if repodata['dirty'] and args.git and False:  # TODO FIXME
             raise ProtoRepoException(
                 "The protorepo has uncommitted changes. This is not allowed with the --git option."
             )
