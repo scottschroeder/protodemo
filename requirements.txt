@@ -9,7 +9,7 @@ docker==3.3.0
 docker-pycreds==0.2.3
 future==0.16.0
 idna==2.6
-Jinja2==2.10
+Jinja2==2.11.3
 jinja2-time==0.2.0
 jsonschema==2.6.0
 MarkupSafe==1.0
